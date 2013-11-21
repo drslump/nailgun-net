@@ -98,7 +98,7 @@ class AppDomainRunner(MarshalByRefObject):
         if ngtype:
             method = ngtype.GetMethod('Prepare', BindingFlags.Public | BindingFlags.Static)
             if method:
-                print "Calling Nailgun Prepare hook!"
+                print "Calling Nailgun.Prepare hook"
                 skip_default = method.Invoke(null, null);
 
         if not skip_default:
@@ -131,13 +131,13 @@ class AppDomainRunner(MarshalByRefObject):
                 raise "Entry point not found"
 
             sw.Stop()
-            print "Load assembly: " + sw.ElapsedMilliseconds 
+            #print "Load assembly: " + sw.ElapsedMilliseconds 
 
             ngtype = asm.GetType('Nailgun')
             if ngtype:
                 method = ngtype.GetMethod('Execute', BindingFlags.Public | BindingFlags.Static)
                 if method:
-                    print "Calling Nailgun hook!"
+                    #print "Calling Nailgun.Execute hook"
                     method.Invoke(null, null);
 
 
@@ -151,16 +151,18 @@ class AppDomainRunner(MarshalByRefObject):
             # Restore console streams
             Console.SetOut(backupOut)
             Console.SetError(backupErr)
+            # and the colors
+            Console.ResetColor()
 
 
 def CreateRunnerInAppDomain(domain as AppDomain, bw as BinaryWriter):
-    assemblies = AppDomain.CurrentDomain.GetAssemblies()
-    for asm in assemblies:
-        print "Preloaded assemblies: $(asm.FullName)"
+    # assemblies = AppDomain.CurrentDomain.GetAssemblies()
+    # for asm in assemblies:
+    #     print "Preloaded assemblies: $(asm.FullName)"
 
-    domain.AssemblyResolve += def (sender, args as ResolveEventArgs):
-        print "Resolving: $(args.Name)"
-        return null
+    # domain.AssemblyResolve += def (sender, args as ResolveEventArgs):
+    #     print "Resolving: $(args.Name)"
+    #     return null
 
     runner as AppDomainRunner = domain.CreateInstanceAndUnwrap(
         typeof(AppDomainRunner).Assembly.FullName, 
@@ -176,19 +178,32 @@ def CreateRunnerInAppDomain(domain as AppDomain, bw as BinaryWriter):
     return runner
 
 
-def server():
+def dumpMemoryUsage():
+    suf = ("B", "KB", "MB", "GB")
+    count = GC.GetTotalMemory(false)
+    if count == 0:
+        place = 0
+    else:
+        bytes = Math.Abs(count);
+        place = Convert.ToInt32(Math.Floor(Math.Log(bytes, 1024)))
+        count = Math.Round(bytes / Math.Pow(1024, place), 1)
 
-    listener = TcpListener(IPAddress.Loopback, 8888)
+    print "[DEBUG] Memory Usage: $(count)$(suf[place])"
+
+def server(argv as (string)):
+
+    port = (argv[0] if len(argv) > 0 else 2113)
+    listener = TcpListener(IPAddress.Loopback, port)
     listener.Start()
 
-    print "TCP server started"
+    print "nailgun-net daemon started on port $port"
 
     domain = AppDomain.CreateDomain("CompilerDomain")
 
     while true:
         # Wait for a new connection
         conn = listener.AcceptTcpClient()
-        print "New connection!"
+        print "Incoming command..."
 
         stream = conn.GetStream()
         br = BinaryReader(stream)
@@ -216,26 +231,28 @@ def server():
                     System.IO.Directory.SetCurrentDirectory(chunk.Data)
                 elif chunk.Type == ChunkType.Command:
 
-                    program = chunk.Data
+                    program = IO.Path.GetFullPath(chunk.Data)
+                    print "Running $program"
 
                     try:
                         sw.Restart()
                         exitCode = runner.Run(program, array(string, args))
-                        sw.Stop()
-                        print "Run:", sw.ElapsedMilliseconds
-
                     except ex:
-                        chunk = Chunk(ChunkType.Stderr, "Error running assembly: $ex")
+                        chunk = Chunk(ChunkType.Stderr, "[nailgun] Error running program: $ex")
                         SerializeChunk(chunk, bw)
                         exitCode = 128
+                    ensure:
+                        sw.Stop()
 
+                    # Notify the client the exit code
                     chunk = Chunk(ChunkType.Exit, exitCode.ToString())
                     SerializeChunk(chunk, bw)
                     bw.Flush()
 
+                    print "Exited with code $exitCode after {0}ms" % (sw.ElapsedMilliseconds,)
 
-                    sw = Stopwatch()
-                    sw.Start()
+
+                    sw.Restart()
 
                     AppDomain.Unload(domain)
                     domain = AppDomain.CreateDomain("CompilerDomain")
@@ -246,7 +263,9 @@ def server():
                     runner.Prepare(program)
                     
                     sw.Stop()
-                    print "Prepare:", sw.ElapsedMilliseconds
+                    print "Background AppDomain ready after a setup of {0}ms" % (sw.ElapsedMilliseconds,)
+
+                    dumpMemoryUsage()
 
                     break
 
@@ -261,4 +280,4 @@ def server():
                 break
 
 
-server()
+server(argv)
