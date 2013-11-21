@@ -38,8 +38,8 @@ increase for moderately complex programs, like the Boo compiler.
 
 The algorithm is designed to improve the compatibility with most
 programs and reduce the risk of introducing bugs in them. Unlike
-the Java version of Nailgun, the static state is not shared across
-different executions, each program is run a clean AppDomain.
+the Java version of Nailgun, static state is not shared across
+different executions, each program is run in a clean AppDomain.
 
 
 ## How can I make my app faster?
@@ -51,7 +51,7 @@ execution.
 
 You can put your logic in this method to prepare your application
 environment for the next execution. From loading assemblies to
-fill up caches.
+filling up caches.
 
 If the method returns a truthy value the default actions will be
 omitted, otherwise any assembly in the same directory will be
@@ -61,13 +61,13 @@ in them (Note: this is not supported in Mono).
 
 ## Roadmap
 
--[x] Prototype
--[ ] Shadow copy of pre-loaded assemblies
--[ ] Windows support
--[ ] Standard input stream support
--[ ] Multi threaded server
--[ ] Signal handling
--[ ] Automatic server spawning
+- [x] Prototype
+- [ ] Shadow copy of pre-loaded assemblies
+- [ ] Windows support
+- [ ] Standard input stream support
+- [ ] Multi threaded server
+- [ ] Signal handling
+- [ ] Automatic server spawning
 
 
 ## License
