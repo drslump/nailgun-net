@@ -35,10 +35,11 @@ namespace nailgun
 import System
 import System.Reflection
 from System.Collections import DictionaryEntry
+from System.Collections.Generic import Dictionary, List
 from System.Net import IPEndPoint, IPAddress
 from System.Net.Sockets import TcpListener, TcpClient
 from System.Diagnostics import Stopwatch
-from System.IO import BinaryReader, BinaryWriter, EndOfStreamException, IOException, TextWriter, TextReader
+from System.IO import Path, Directory, BinaryReader, BinaryWriter, EndOfStreamException, IOException, TextWriter, TextReader
 
 
 class AppDomainRunner(MarshalByRefObject):
@@ -50,9 +51,8 @@ class AppDomainRunner(MarshalByRefObject):
         Error = NailgunStreamError(bw)
 
     def PreJIT(asmfile as string):
-        print "file:", asmfile
-        # Try to pre-initialize types by referencing them
         asm = Reflection.Assembly.LoadFrom(asmfile)
+        # Try to pre-initialize types by referencing them
         # try:
         #     for type in asm.GetExportedTypes():
         #         GC.KeepAlive(type)
@@ -63,19 +63,16 @@ class AppDomainRunner(MarshalByRefObject):
         try:
             for type in asm.GetTypes():
                 # print "Type:", type
-                for method in type.GetMethods(BindingFlags.DeclaredOnly | 
-                    BindingFlags.NonPublic | 
-                    BindingFlags.Public | BindingFlags.Instance | 
-                    BindingFlags.Static):
-
+                flags = BindingFlags.DeclaredOnly | BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static
+                for method in type.GetMethods(flags):
                     if method.Attributes & method.Attributes.Abstract == MethodAttributes.Abstract:
                         continue
 
                     try:
-                        # NOTE: this is a no-op in Mono
+                        # NOTE: this is a no-op in Mono currently (3.2)
                         System.Runtime.CompilerServices.RuntimeHelpers.PrepareMethod(method.MethodHandle)
                     except:
-                        print "error jitting method:", method
+                        print "Error pre-jitting method:", method
 
                 # HACK: This is very dirty, since mono doesn't allow to programatically
                 #       force the jitting of methods, we try to trigger it by invoking
@@ -87,7 +84,7 @@ class AppDomainRunner(MarshalByRefObject):
                 # except:
                 #     print "error with constructor for:", type
         except:
-            print "error loading types"
+            print "Error loading types from assembly:", asm
 
 
     def Prepare(program as string):
@@ -104,12 +101,12 @@ class AppDomainRunner(MarshalByRefObject):
         if not skip_default:
             try:
                 path = System.IO.Path.GetDirectoryName(program)
-                print 'path:', path
+                print "Pre-loading assemblies from", path
                 files = System.IO.Directory.EnumerateFiles(path, "*.dll")
                 for f in files:
                     PreJIT(f)
             except:
-                print "Error running default prepare"
+                print "Error running default preparation"
 
 
     def Run(program as string, argv as (string)) as int:
@@ -120,18 +117,10 @@ class AppDomainRunner(MarshalByRefObject):
         Console.SetError(Error)
 
         try:
-            sw = Stopwatch()
-            sw.Start()
-
             asm = Reflection.Assembly.LoadFrom(program)
-
-            # print asm
             main = asm.EntryPoint
             if not main:
                 raise "Entry point not found"
-
-            sw.Stop()
-            #print "Load assembly: " + sw.ElapsedMilliseconds 
 
             ngtype = asm.GetType('Nailgun')
             if ngtype:
@@ -143,6 +132,7 @@ class AppDomainRunner(MarshalByRefObject):
 
             # print 'args:', join(argv, ', ')
             result as duck = main.Invoke(null, (argv,))
+
             if result != null:
                 return result
             else:
@@ -156,14 +146,6 @@ class AppDomainRunner(MarshalByRefObject):
 
 
 def CreateRunnerInAppDomain(domain as AppDomain, bw as BinaryWriter):
-    # assemblies = AppDomain.CurrentDomain.GetAssemblies()
-    # for asm in assemblies:
-    #     print "Preloaded assemblies: $(asm.FullName)"
-
-    # domain.AssemblyResolve += def (sender, args as ResolveEventArgs):
-    #     print "Resolving: $(args.Name)"
-    #     return null
-
     runner as AppDomainRunner = domain.CreateInstanceAndUnwrap(
         typeof(AppDomainRunner).Assembly.FullName, 
         typeof(AppDomainRunner).FullName, 
@@ -190,6 +172,48 @@ def dumpMemoryUsage():
 
     print "[DEBUG] Memory Usage: $(count)$(suf[place])"
 
+
+class Command:
+""" Represents a command as send by the client to execute
+"""
+    property Env = Dictionary[of string, string]()
+    property Args = List[of string]()
+    property WorkingDirectory as string
+
+    _runner as AppDomainRunner
+
+    def constructor(domain as AppDomain, bw as BinaryWriter):
+        _runner = CreateRunnerInAppDomain(domain, bw)
+
+    def Run(program) as int:
+        # Make sure we are running from the same directory as the client
+        cwd = Directory.GetCurrentDirectory()
+        if WorkingDirectory:
+            Directory.SetCurrentDirectory(WorkingDirectory)
+
+        # Backup and reset the current environment variables
+        backup_env = Dictionary[of string, string]()
+        for key in Environment.GetEnvironmentVariables().Keys:
+            backup_env[key] = Environment.GetEnvironmentVariable(key)
+            Environment.SetEnvironmentVariable(key, null)
+
+        # Setup the environment variables
+        for pair in Env:
+            Environment.SetEnvironmentVariable(pair.Key, pair.Value)
+
+        try:
+            program = Path.GetFullPath(program)
+            exitCode = _runner.Run(program, array(string, Args))
+        ensure:
+            # Restore process environment
+            Directory.SetCurrentDirectory(cwd)
+            for pair in backup_env:
+                Environment.SetEnvironmentVariable(pair.Key, pair.Value)
+
+        return exitCode
+
+
+
 def server(argv as (string)):
 
     port = (argv[0] if len(argv) > 0 else 2113)
@@ -198,6 +222,7 @@ def server(argv as (string)):
 
     print "nailgun-net daemon started on port $port"
 
+    # Bootstrap an initial AppDomain
     domain = AppDomain.CreateDomain("CompilerDomain")
 
     while true:
@@ -209,40 +234,46 @@ def server(argv as (string)):
         br = BinaryReader(stream)
         bw = BinaryWriter(stream)
 
-        runner = CreateRunnerInAppDomain(domain, bw)
+        command = Command(domain, bw)
 
-        # Reset the current environment variables
-        for key in Environment.GetEnvironmentVariables().Keys:
-            Environment.SetEnvironmentVariable(key, null)
-
-        args = []
         sw = Stopwatch()
         program = null
         while true:
             try:
                 chunk = ParseChunk(br)
                 # print "Type: $(chunk.Type) -- $(chunk.Data)"
+
                 if chunk.Type == ChunkType.Argument:
-                    args.Add(chunk.Data)
+                    command.Args.Add(chunk.Data)
                 elif chunk.Type == ChunkType.Environment:
                     key, value = chunk.Data.Split((char('='),), 2)
-                    Environment.SetEnvironmentVariable(key, value)
+                    command.Env[key] = value
                 elif chunk.Type == ChunkType.WorkingDirectory:
-                    System.IO.Directory.SetCurrentDirectory(chunk.Data)
+                    command.WorkingDirectory = chunk.Data
                 elif chunk.Type == ChunkType.Command:
 
-                    program = IO.Path.GetFullPath(chunk.Data)
+                    program = chunk.Data
+                    if not Path.IsPathRooted(program):
+                        program = Path.Combine(command.WorkingDirectory, program)
+                    
                     print "Running $program"
 
                     try:
                         sw.Restart()
-                        exitCode = runner.Run(program, array(string, args))
+                        exitCode = command.Run(program)
                     except ex:
                         chunk = Chunk(ChunkType.Stderr, "[nailgun] Error running program: $ex")
                         SerializeChunk(chunk, bw)
                         exitCode = 128
                     ensure:
                         sw.Stop()
+
+                    # Make sure we reset the color
+                    # TODO: Only do it if ansi colors are enabled
+                    chunk = Chunk(ChunkType.Stdout, char(0x1B) + "[0m")
+                    SerializeChunk(chunk, bw)
+                    chunk = Chunk(ChunkType.Stderr, char(0x1B) + "[0m")
+                    SerializeChunk(chunk, bw)
 
                     # Notify the client the exit code
                     chunk = Chunk(ChunkType.Exit, exitCode.ToString())
@@ -251,15 +282,13 @@ def server(argv as (string)):
 
                     print "Exited with code $exitCode after {0}ms" % (sw.ElapsedMilliseconds,)
 
-
                     sw.Restart()
 
+                    # Re-cycle the AppDomain and prepare it for next run
                     AppDomain.Unload(domain)
                     domain = AppDomain.CreateDomain("CompilerDomain")
 
-                    # TODO: Find a better way to handle Input/Output streams (delegates?)
-                    runner = CreateRunnerInAppDomain(domain, bw)
-
+                    runner = CreateRunnerInAppDomain(domain, bw) 
                     runner.Prepare(program)
                     
                     sw.Stop()

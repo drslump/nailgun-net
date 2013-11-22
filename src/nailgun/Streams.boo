@@ -5,7 +5,7 @@ from System.IO import TextReader, TextWriter, BinaryReader, BinaryWriter
 
 
 # TODO: Enable ansi colors with a command line switch or inspected the client sent environment
-def toAnsi():
+def toAnsi(fg, bg):
 
     bright = {
         ConsoleColor.Black: 30,
@@ -30,15 +30,15 @@ def toAnsi():
     }
 
     esc = char(0x1B) + "["
-    if Console.ForegroundColor in bright:
-        esc += '1;' + bright[Console.ForegroundColor]
+    if fg in bright:
+        esc += '1;' + bright[fg]
     else:
-        esc += dark[Console.ForegroundColor]
+        esc += dark[fg]
 
-    if Console.BackgroundColor in bright:
-        esc += ';' + (10 + bright[Console.BackgroundColor] cast int)
+    if bg in bright:
+        esc += ';' + (10 + bright[bg] cast int)
     else:
-        esc += ';' + (10 + dark[Console.BackgroundColor] cast int)
+        esc += ';' + (10 + dark[bg] cast int)
 
     return esc + 'm'
 
@@ -66,9 +66,9 @@ class NailgunStreamOutput(TextWriter):
 
     override def Write(value as string):
         if Console.ForegroundColor != lastFg or Console.BackgroundColor != lastBg:
-            value = toAnsi() + value
             lastFg = Console.ForegroundColor
             lastBg = Console.BackgroundColor
+            value = toAnsi(lastFg, lastBg) + value
 
         chunk = Chunk(chunkType, value)
         SerializeChunk(chunk, stream)
