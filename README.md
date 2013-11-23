@@ -23,12 +23,16 @@ client (`ng`).
   - Default: Preload assemblies in same directory and prejit methods in domain
 - Next execution uses the warmed up AppDomain
 
+In essence it will make any program slower, however for repeated executions
+the *perceived speed up* is usually considerable, although it varies from
+program to program.
+
 
 ## How good is it?
 
 The prototype shows some very good speed ups, without implementing a
 customized `Prepare` method in the target program the improvement is
-around a 20-30% for simple command line utilities.
+around a 30-50% for simple command line utilities.
 
 When using a specialized `Prepare` method it shows up to a 100% speed
 increase for moderately complex programs, like the Boo compiler.
@@ -40,6 +44,11 @@ The algorithm is designed to improve the compatibility with most
 programs and reduce the risk of introducing bugs in them. Unlike
 the Java version of Nailgun, static state is not shared across
 different executions, each program is run in a clean AppDomain.
+That said, you'll have to try it for yourself.
+
+If your program uses colored output, the server can convert them
+to Ansi escape sequences if your terminal supports them. The result
+is not 100% correct but works fine enough most of the time.
 
 
 ## How can I make my app faster?
@@ -65,10 +74,12 @@ in them (Note: this is not supported in Mono).
 - [ ] Shadow copy of pre-loaded assemblies
 - [ ] Windows support
 - [ ] Standard input stream support
-- [ ] Multi threaded server
+- [x] Multi threaded server
 - [ ] Signal handling
 - [ ] Automatic server spawning
-
+- [ ] Warm up pristine AppDomains in the background
+- [ ] Program cancellation on client disconnection
+- [ ] Make AppDomain reusing an option 
 
 ## License
 

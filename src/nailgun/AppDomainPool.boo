@@ -31,6 +31,7 @@ class AppDomainPool:
 
     _domains = ConcurrentDictionary[of string, AppDomain]()
     _sorted = SortedSet[of Entry](EntryComparer())
+    _warmed = ConcurrentQueue[of AppDomain]()
 
     protected def CreateRunner(program as string, domain as AppDomain):
         runner as AppDomainRunner = domain.CreateInstanceAndUnwrap(
@@ -56,13 +57,22 @@ class AppDomainPool:
                     Remove(entry.Program)
                     break
 
-        domain = AppDomain.CreateDomain(program)
-         
+        domain as AppDomain
+        _warmed.TryDequeue(domain)
+        if not domain:
+            domain = AppDomain.CreateDomain(program)
+
         lock _sorted:
             entry = Entry(Program: program, Domain: domain, LastUsed: DateTime.Now)
             _sorted.Add(entry)
 
         return domain
+
+    def Warmup():
+    """ Creates a series of AppDomains waiting to be used """
+        while len(_warmed) < MaxDomains - len(_domains):
+            domain = AppDomain.CreateDomain('warmed-' + len(_warmed))
+            _warmed.Enqueue(domain)
 
     def Acquire(program) as AppDomainRunner:
     """ Acquire a domain associated to the program and lock on it """

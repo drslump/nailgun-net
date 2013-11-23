@@ -66,6 +66,7 @@ def server(argv as (string)):
 
     # Bootstrap an AppDomain pool
     pool = AppDomainPool()
+    pool.Warmup()
 
     while true:
         # Wait for a new connection
