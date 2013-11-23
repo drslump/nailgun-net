@@ -5,12 +5,13 @@ Protocol should be compatible with Nailgun (http://www.martiansoftware.com/nailg
 namespace nailgun
 
 from System import UInt32
-from System.IO import BinaryReader, BinaryWriter
-from System.Net.IPAddress import NetworkToHostOrder, HostToNetworkOrder
+from System.IO import Stream, BinaryReader, BinaryWriter
+from System.Net.IPAddress import NetworkToHostOrder
 from System.Text import ASCIIEncoding
 
 
 enum ChunkType:
+    Unknown
     Argument
     Environment
     WorkingDirectory
@@ -24,8 +25,8 @@ enum ChunkType:
     Heartbeat
 
 
-class Chunk:
-    static public mapping = {
+struct Chunk:
+    static public Mapping = {
         ChunkType.Argument: 'A',
         ChunkType.Environment: 'E',
         ChunkType.WorkingDirectory: 'D',
@@ -50,47 +51,53 @@ class Chunk:
         Data = data
 
 
-def ByteToChunkType(type as byte) as ChunkType:
-    strtype = ASCIIEncoding.ASCII.GetString((type,))
-    for pair in Chunk.mapping:
-        if pair.Value == strtype:
-            return pair.Key
+class NailgunReader(BinaryReader):
+""" Extends the binary reader to support Chunk types 
+"""
+    def constructor(stream as Stream):
+        super(stream)
 
-    raise "Unsupported chunk type: $type"
+    def ReadChunk() as Chunk:
+        # TODO: Perhaps is safer to handle the bytes ourselves like in the writer
+        size as uint = NetworkToHostOrder(ReadInt32())
+        type as byte = ReadByte()
+
+        data as string = null
+        if size > 0:
+            bytes = ReadBytes(size)
+            # TODO: Shall we default to UTF8? Work with bytes instead?
+            data = ASCIIEncoding().GetString(bytes, 0, bytes.Length)
+
+        strtype = ASCIIEncoding.ASCII.GetString((type,))
+        chunktype = ChunkType.Unknown
+        for pair in Chunk.Mapping:
+            if pair.Value == strtype:
+                chunktype = pair.Key
+
+        return Chunk(chunktype, data)
 
 
-def ChunkTypeToByte(type as ChunkType) as byte:
-    strtype as string = Chunk.mapping[type]
-    return ASCIIEncoding.ASCII.GetBytes(strtype)[0]
+class NailgunWriter(BinaryWriter):
+""" Extends the binary writer to support Chunk types 
+"""
+    def constructor(stream as Stream):
+        super(stream)
 
+    def Write(chunk as Chunk):
+        if chunk.Data != null:
+            buffer = ASCIIEncoding().GetBytes(chunk.Data)
+            l = buffer.Length
+            size = array(byte, 4)
+            size[0] = (l >> 24) & 0xff
+            size[1] = (l >> 16) & 0xff
+            size[2] = (l >> 8) & 0xff
+            size[3] = l & 0xff;
+            Write(size)
+        else:
+            Write(0 cast int)
 
-def ParseChunk(br as BinaryReader):
-    size as uint = NetworkToHostOrder(br.ReadInt32())
-    type as byte = br.ReadByte()
+        strtype = Chunk.Mapping[chunk.Type] as string
+        type = ASCIIEncoding.ASCII.GetBytes(strtype)[0]
 
-    data as string = null
-    if size > 0:
-        bytes = br.ReadBytes(size)
-        data = ASCIIEncoding().GetString(bytes, 0, bytes.Length)
-
-    return Chunk(ByteToChunkType(type), data)
-
-
-def SerializeChunk(chunk as Chunk, bw as BinaryWriter):
-    if chunk.Data != null:
-        buffer = ASCIIEncoding().GetBytes(chunk.Data)
-    else:
-        buffer = array(byte, 0)
-
-    # Avoid runtime complaints about negative numbers being casted to unsigned
-    # unchecked:
-    #     bw.Write(HostToNetworkOrder(buffer.Length) cast uint)
-    size = array(byte, 4)
-    size[0] = (buffer.Length >> 24) & 0xff
-    size[1] = (buffer.Length >> 16) & 0xff
-    size[2] = (buffer.Length >> 8) & 0xff
-    size[3] = buffer.Length & 0xff;
-    bw.Write(size)
-
-    bw.Write(ChunkTypeToByte(chunk.Type))
-    bw.Write(buffer)
+        Write(type)
+        Write(buffer)

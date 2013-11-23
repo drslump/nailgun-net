@@ -1,7 +1,7 @@
 namespace nailgun
 
 from System import Console, ConsoleColor
-from System.IO import TextReader, TextWriter, BinaryReader, BinaryWriter
+from System.IO import Stream, TextReader, TextWriter, BinaryReader, BinaryWriter
 
 
 # TODO: Enable ansi colors with a command line switch or inspected the client sent environment
@@ -44,22 +44,18 @@ def toAnsi(fg, bg):
 
 
 class NailgunStreamOutput(TextWriter):
-    chunkType as ChunkType
-    stream as BinaryWriter
-
     lastFg as ConsoleColor
     lastBg as ConsoleColor
 
-    def constructor(stream as BinaryWriter, chunkType as ChunkType):
+    delegate as callable(string)
+
+    def constructor(delegate as callable(string)):
         super()
-        self.stream = stream
-        self.chunkType = chunkType
 
-        lastFg = Console.ForegroundColor
-        lastBg = Console.BackgroundColor
+        self.delegate = delegate
 
-    def constructor(stream as BinaryWriter):
-        self(stream, ChunkType.Stdout)
+        self.lastFg = Console.ForegroundColor
+        self.lastBg = Console.BackgroundColor
 
     override def Write(value as char):
         Write(value.ToString())
@@ -70,14 +66,8 @@ class NailgunStreamOutput(TextWriter):
             lastBg = Console.BackgroundColor
             value = toAnsi(lastFg, lastBg) + value
 
-        chunk = Chunk(chunkType, value)
-        SerializeChunk(chunk, stream)
-
-
-class NailgunStreamError(NailgunStreamOutput):
-
-    def constructor(stream as BinaryWriter):
-        super(stream, ChunkType.Stderr)
+        if delegate:
+            delegate(value)
 
 
 class NailgunStreamInput(TextReader):
