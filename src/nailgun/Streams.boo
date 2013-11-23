@@ -4,46 +4,45 @@ from System import Console, ConsoleColor
 from System.IO import Stream, TextReader, TextWriter, BinaryReader, BinaryWriter
 
 
-# TODO: Enable ansi colors with a command line switch or inspected the client sent environment
-def toAnsi(fg, bg):
-
-    bright = {
-        ConsoleColor.Black: 30,
-        ConsoleColor.Red: 31,
-        ConsoleColor.Green: 32,
-        ConsoleColor.Yellow: 33,
-        ConsoleColor.Blue: 34,
-        ConsoleColor.Magenta: 35,
-        ConsoleColor.Cyan: 36,
-        ConsoleColor.White: 37,
-    }
-
-    dark = {
-        ConsoleColor.DarkRed: 31,
-        ConsoleColor.DarkGreen: 32,
-        ConsoleColor.DarkYellow: 33,
-        ConsoleColor.DarkBlue: 34,
-        ConsoleColor.DarkMagenta: 35,
-        ConsoleColor.DarkCyan: 36,
-        ConsoleColor.Gray: 37,
-        ConsoleColor.DarkGray: 30,
-    }
-
-    esc = char(0x1B) + "["
-    if fg in bright:
-        esc += '1;' + bright[fg]
-    else:
-        esc += dark[fg]
-
-    if bg in bright:
-        esc += ';' + (10 + bright[bg] cast int)
-    else:
-        esc += ';' + (10 + dark[bg] cast int)
-
-    return esc + 'm'
-
-
 class NailgunStreamOutput(TextWriter):
+
+    static colorDark = {
+        ConsoleColor.Black: 0,
+        ConsoleColor.DarkRed: 1,
+        ConsoleColor.DarkGreen: 2,
+        ConsoleColor.DarkYellow: 3,
+        ConsoleColor.DarkBlue: 4,
+        ConsoleColor.DarkMagenta: 5,
+        ConsoleColor.DarkCyan: 6,
+        ConsoleColor.Gray: 7,
+    }
+
+    static colorLight = {
+        ConsoleColor.DarkGray: 0,
+        ConsoleColor.Red: 1,
+        ConsoleColor.Green: 2,
+        ConsoleColor.Yellow: 3,
+        ConsoleColor.Blue: 4,
+        ConsoleColor.Magenta: 5,
+        ConsoleColor.Cyan: 6,
+        ConsoleColor.White: 7,
+    }
+
+    static def GetAnsiColor(color as ConsoleColor, base as int):
+        code = char(0x1b) + "["
+        if color in colorLight:
+            code += "1;"
+            base += colorLight[color] cast int
+        else:
+            base += colorDark[color] cast int
+
+        code += base + "m"
+
+        return code
+
+
+    property Ansi as bool
+
     lastFg as ConsoleColor
     lastBg as ConsoleColor
 
@@ -61,10 +60,20 @@ class NailgunStreamOutput(TextWriter):
         Write(value.ToString())
 
     override def Write(value as string):
-        if Console.ForegroundColor != lastFg or Console.BackgroundColor != lastBg:
-            lastFg = Console.ForegroundColor
-            lastBg = Console.BackgroundColor
-            value = toAnsi(lastFg, lastBg) + value
+        if Ansi:
+            # HACK: Perhaps it's only in Mono but calling `ResetColor` doesn't modify
+            #       the FC or BC properties, so we can't detect them properly.
+            #       What we do is just use the changed colors for the current string,
+            #       not ideal but seems to work better than ignoring the reset completely.
+            if Console.ForegroundColor != lastFg or Console.BackgroundColor != lastBg:
+                value += char(0x1B) + "[0m"
+
+            if Console.ForegroundColor != lastFg:
+                lastFg = Console.ForegroundColor
+                value = GetAnsiColor(lastFg, 30) + value
+            if Console.BackgroundColor != lastBg:
+                lastBg = Console.BackgroundColor
+                value = GetAnsiColor(lastBg, 40) + value
 
         if delegate:
             delegate(value)

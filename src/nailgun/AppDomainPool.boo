@@ -13,6 +13,8 @@ class AppDomainPool:
 
     TODO: Add some way to automatically destroy AppDomains after
           a certain amount of time.
+
+    TODO: Refactor needed. Too complex and most probably full of bugs :(
 """
 
     class Entry:
@@ -33,14 +35,14 @@ class AppDomainPool:
     _sorted = SortedSet[of Entry](EntryComparer())
     _warmed = ConcurrentQueue[of AppDomain]()
 
-    protected def CreateRunner(program as string, domain as AppDomain):
+    protected def CreateRunner(command as Command, domain as AppDomain):
         runner as AppDomainRunner = domain.CreateInstanceAndUnwrap(
             typeof(AppDomainRunner).Assembly.FullName,
             typeof(AppDomainRunner).FullName,
             false,
             BindingFlags.Public | BindingFlags.Instance,
             null,
-            (program,),
+            (command,),
             null,
             null
         )
@@ -74,15 +76,15 @@ class AppDomainPool:
             domain = AppDomain.CreateDomain('warmed-' + len(_warmed))
             _warmed.Enqueue(domain)
 
-    def Acquire(program) as AppDomainRunner:
+    def Acquire(command as Command) as AppDomainRunner:
     """ Acquire a domain associated to the program and lock on it """
-        domain = _domains.GetOrAdd(program, Create)
+        domain = _domains.GetOrAdd(command.Program, Create)
 
         # Lock on the domain instance
         Threading.Monitor.Enter(domain)
-        print "Locking on $domain"
+        print "Locking on $command (domain: $domain)"
 
-        return CreateRunner(program, domain)
+        return CreateRunner(command, domain)
 
     def Release(program):
     """ Release the lock on the domain associated to the program """
@@ -100,15 +102,17 @@ class AppDomainPool:
                         _sorted.Add(entry)
                         break
 
-            print "Release $domain"
+            print "Release $program (domain: $domain)"
             Threading.Monitor.Exit(domain)
 
-    def Reload(program as string):
+    def Reload(command as Command):
         domain as AppDomain
-        _domains.TryRemove(program, domain)
+        _domains.TryRemove(command.Program, domain)
+
+        print "Reload: $domain"
 
         # Ask for a new one before lifting the lock on the previous
-        runner = Acquire(program)
+        runner = Acquire(command)
 
         # Lift the lock on the previous one
         Threading.Monitor.Exit(domain)
@@ -120,6 +124,7 @@ class AppDomainPool:
                 break
 
         lock domain:
+            print "Disposing: $domain"
             AppDomain.Unload(domain)
 
         return runner
@@ -140,5 +145,6 @@ class AppDomainPool:
                     break
 
         lock domain:
+            print "Disposing: $domain"
             AppDomain.Unload(domain)
 

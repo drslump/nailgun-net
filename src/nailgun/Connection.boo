@@ -8,40 +8,37 @@ from System.Diagnostics import Stopwatch
 import Boo.Lang.PatternMatching
 
 
-class StreamsProxy(MarshalByRefObject, IDisposable):
-""" Allows to subscribe to events in the AppDomain without making
-    the whole Connection type serializable.
-"""
-    runner as AppDomainRunner
-    bw as NailgunWriter
-
-    def constructor(runner as AppDomainRunner, bw as NailgunWriter):
-        self.runner = runner
-        self.bw = bw
-        runner.StdOut += OnStdOut
-        runner.StdErr += OnStdErr
-
-    def Dispose():
-        runner.StdOut -= OnStdOut
-        runner.StdErr -= OnStdErr
-        # Make sure we reset the color
-        # TODO: Only do it if ansi colors are enabled
-        bw.Write(Chunk(ChunkType.Stdout, char(0x1B) + "[0m"))
-        bw.Write(Chunk(ChunkType.Stderr, char(0x1B) + "[0m"))
-
-    def OnStdOut(s):
-        bw.Write(Chunk(ChunkType.Stdout, s))
-
-    def OnStdErr(s):
-        bw.Write(Chunk(ChunkType.Stderr, s))
-
-
 
 class Connection:
 """ Handles the interaction with a client.
     The operation is thread safe to allow the daemon to serve
     multiple clients in parallel.
 """
+
+    class StreamsProxy(MarshalByRefObject, IDisposable):
+    """ Allows to subscribe to events in the AppDomain without having
+        to remote with the whole Connection type.
+    """
+        _runner as AppDomainRunner
+        _writer as NailgunWriter
+
+        def constructor(runner as AppDomainRunner, nw as NailgunWriter):
+            _writer = nw
+            _runner = runner
+            _runner.StdOut += OnStdOut
+            _runner.StdErr += OnStdErr
+
+        def Dispose():
+            _runner.StdOut -= OnStdOut
+            _runner.StdErr -= OnStdErr
+
+        def OnStdOut(s):
+            _writer.Write(Chunk(ChunkType.Stdout, s))
+
+        def OnStdErr(s):
+            _writer.Write(Chunk(ChunkType.Stderr, s))
+
+
     pool as AppDomainPool
     client as TcpClient
     heartbeat as Stopwatch
@@ -96,7 +93,7 @@ class Connection:
                             sw.Restart()
 
                             # Acquire a new runner from the bound domain
-                            runner = self.pool.Acquire(command.Program)
+                            runner = self.pool.Acquire(command)
 
                             sw.Stop()
                             if sw.Elapsed > 50ms:
@@ -104,7 +101,7 @@ class Connection:
                             sw.Start()
 
                             using StreamsProxy(runner, bw):
-                                exitCode = command.Run(runner)
+                                exitCode = runner.Execute()
 
                         except ex:
                             bw.Write(Chunk(ChunkType.Stderr, "[nailgun] Error running program: $ex"))
@@ -122,7 +119,7 @@ class Connection:
                         print "Exited with code $exitCode after {0}ms" % (sw.ElapsedMilliseconds,)
 
                         sw.Restart()
-                        runner = self.pool.Reload(command.Program)
+                        runner = self.pool.Reload(command)
                         sw.Stop()
                         print "Domain reloading took {0}ms" % (sw.ElapsedMilliseconds,)
 

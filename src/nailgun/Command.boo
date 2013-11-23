@@ -1,13 +1,13 @@
 namespace nailgun
 
-from System import AppDomain, Environment
+from System import MarshalByRefObject
 from System.Collections.Generic import Dictionary, List
-from System.IO import Path, Directory
-from System.Reflection import BindingFlags
+from System.IO import Path
 
 
-class Command:
+class Command(MarshalByRefObject):
 """ Models a command as sent by the client
+    NOTE: This type will be marshaled to be consumed in an AppDomain
 """
     property Env = Dictionary[of string, string]()
     property Args = List[of string]()
@@ -23,33 +23,24 @@ class Command:
             _program = Path.GetFullPath(value)
 
 
-    def Run(runner as AppDomainRunner) as int:
-        # TODO: What happens when two programs are run in parallel with 
-        #       CurrentDirectory, Environment and Console redirection?
+    def SupportsAnsi(idx as int):
+        # Checks if it's explicitly disabled
+        if "NAILGUN_TTY_$idx" in Env and Env["NAILGUN_TTY_$idx"] == "0":
+            return false
 
-        # Make sure we are running from the same directory as the client
-        cwd = Directory.GetCurrentDirectory()
-        if WorkingDirectory:
-            Directory.SetCurrentDirectory(WorkingDirectory)
+        # Use global environment setting (non-standard Nailgun)
+        if 'NAILGUN_ANSI' in Env:
+            return Env['NAILGUN_ANSI'] =~ /^\s*(yes|true|on|1)\s*$/i
 
-        # Backup and reset the current environment variables
-        backup_env = Dictionary[of string, string]()
-        for key in Environment.GetEnvironmentVariables().Keys:
-            backup_env[key] = Environment.GetEnvironmentVariable(key)
-            Environment.SetEnvironmentVariable(key, null)
+        # Disable for Windows clients since we won't have TTY info from them
+        if 'NAILGUN_FILESEPARATOR' in Env and Env['NAILGUN_FILESEPARATOR'] == '\\':
+            return false
 
-        # Setup the environment variables
-        for pair in Env:
-            Environment.SetEnvironmentVariable(pair.Key, pair.Value)
+        # Check the reported terminal
+        if 'TERM' in Env and Env['TERM'] =~ /^(xterm|rxvt)/i:
+            return 'COLORTERM' in Env or Env['TERM'] =~ /color/i
 
-        try:
+        return false
 
-            exitCode = runner.Execute(array(string, Args))
-
-        ensure:
-            # Restore process environment
-            Directory.SetCurrentDirectory(cwd)
-            for pair in backup_env:
-                Environment.SetEnvironmentVariable(pair.Key, pair.Value)
-
-        return exitCode
+    def ToString():
+        return "Command[$_program]"

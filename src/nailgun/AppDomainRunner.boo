@@ -1,7 +1,8 @@
 namespace nailgun
 
-from System import Console, MarshalByRefObject, AppDomain
-from System.IO import TextWriter, Path, Directory, BinaryReader, BinaryWriter
+from System import Console, Environment, MarshalByRefObject, AppDomain
+from System.Collections.Generic import Dictionary
+from System.IO import Path, Directory
 from System.Reflection import Assembly, MethodAttributes, BindingFlags
 from System.Runtime.CompilerServices import RuntimeHelpers
 
@@ -21,22 +22,19 @@ class AppDomainRunner(MarshalByRefObject):
     Domain:
         get: return AppDomain.CurrentDomain
 
-    property Initialized as bool
-
-
-    _program as string
+    _command as Command
 
     _stdin as NailgunStreamInput
     _stdout as NailgunStreamOutput
     _stderr as NailgunStreamOutput
 
-    def constructor(program):
-        _program = program
+    def constructor(command as Command):
+        _command = command
 
         # Bind the standard output streams to the exported events
-        _stdout = NailgunStreamOutput(OnStdOut)
-        _stderr = NailgunStreamOutput(OnStdErr)
-        
+        _stdout = NailgunStreamOutput(OnStdOut, Ansi: command.SupportsAnsi(1))
+        _stderr = NailgunStreamOutput(OnStdErr, Ansi: command.SupportsAnsi(2))
+
     override def InitializeLifetimeService():
     """ Protect against the runtime tearing down the object after some time """
         return null
@@ -87,7 +85,7 @@ class AppDomainRunner(MarshalByRefObject):
 
         skip_default as duck = true
 
-        asm = Assembly.LoadFrom(_program)
+        asm = Assembly.LoadFrom(_command.Program)
         ngtype = asm.GetType('Nailgun')
         if ngtype:
             method = ngtype.GetMethod('Prepare', BindingFlags.Public | BindingFlags.Static)
@@ -97,7 +95,7 @@ class AppDomainRunner(MarshalByRefObject):
 
         if not skip_default:
             try:
-                path = Path.GetDirectoryName(_program)
+                path = Path.GetDirectoryName(_command.Program)
                 print "Pre-loading assemblies from", path
                 files = Directory.EnumerateFiles(path, "*.dll")
                 for f in files:
@@ -106,7 +104,7 @@ class AppDomainRunner(MarshalByRefObject):
                 print "Error running default preparation"
 
 
-    def Execute(argv as (string)) as int:
+    protected def Invoke(asm as Assembly, argv as (string)) as int:
         # Replace console streams
         backupOut = Console.Out
         Console.SetOut(_stdout)
@@ -114,8 +112,6 @@ class AppDomainRunner(MarshalByRefObject):
         Console.SetError(_stderr)
 
         try:
-            asm = Assembly.LoadFrom(_program)
-
             # Check if we find an override for Main
             ngtype = asm.GetType('Nailgun')
             if ngtype:
@@ -135,11 +131,51 @@ class AppDomainRunner(MarshalByRefObject):
             else:
                 return 0
         ensure:
+            # Make sure we reset Ansi colors
+            if _command.SupportsAnsi(1):
+                Console.Out.Write(char(0x1B) + "[0m")
+            if _command.SupportsAnsi(2):
+                Console.Error.Write(char(0x1B) + "[0m")
+
             # Restore console streams
             Console.SetOut(backupOut)
             Console.SetError(backupErr)
             # and the colors
             Console.ResetColor()
 
+    def Execute() as int:
+        # TODO: What happens when two programs are run in parallel with 
+        #       CurrentDirectory, Environment and Console redirection?
+
+        # Make sure we are running from the same directory as the client
+        cwd = Directory.GetCurrentDirectory()
+        if _command.WorkingDirectory:
+            Directory.SetCurrentDirectory(_command.WorkingDirectory)
+
+        # Backup and reset the current environment variables
+        backup_env = Dictionary[of string, string]()
+        for key in Environment.GetEnvironmentVariables().Keys:
+            backup_env[key] = Environment.GetEnvironmentVariable(key)
+            Environment.SetEnvironmentVariable(key, null)
+
+        # Setup the environment variables
+        for pair in _command.Env:
+            Environment.SetEnvironmentVariable(pair.Key, pair.Value)
+
+        result as duck
+        try:
+
+            asm = Assembly.LoadFrom(_command.Program)
+            result = Invoke(asm, _command.Args.ToArray())
+
+        ensure:
+            # Restore process environment
+            Directory.SetCurrentDirectory(cwd)
+            for pair in backup_env:
+                Environment.SetEnvironmentVariable(pair.Key, pair.Value)
+
+        return result
+
+
     def ToString():
-        return "Runner[$_program]"
+        return "Runner[$_command.Program]"
