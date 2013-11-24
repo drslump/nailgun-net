@@ -84,6 +84,9 @@ class NailgunWriter(BinaryWriter):
         super(stream)
 
     def Write(chunk as Chunk):
+        strtype = Chunk.Mapping[chunk.Type] as string
+        type = ASCIIEncoding.ASCII.GetBytes(strtype)[0]
+
         if chunk.Data != null:
             buffer = ASCIIEncoding().GetBytes(chunk.Data)
             l = buffer.Length
@@ -93,11 +96,8 @@ class NailgunWriter(BinaryWriter):
             size[2] = (l >> 8) & 0xff
             size[3] = l & 0xff;
             Write(size)
+            Write(type)
+            Write(buffer)
         else:
             Write(0 cast int)
-
-        strtype = Chunk.Mapping[chunk.Type] as string
-        type = ASCIIEncoding.ASCII.GetBytes(strtype)[0]
-
-        Write(type)
-        Write(buffer)
+            Write(type)

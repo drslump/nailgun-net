@@ -15,12 +15,14 @@ class AppDomainRunner(MarshalByRefObject):
           AppDomain. Calls are performed using remoting which is slow,
           so it shouldn't use complex types as params or return values.
 """
-    event StdIn as callable(string)
-    event StdOut as callable(string)
-    event StdErr as callable(string)
+    property StdIn as NailgunStreamInput.InputCallback
+    property StdOut as callable(string)
+    property StdErr as callable(string)
 
     Domain:
         get: return AppDomain.CurrentDomain
+
+    property IsRunning = false
 
     _command as Command
 
@@ -31,13 +33,17 @@ class AppDomainRunner(MarshalByRefObject):
     def constructor(command as Command):
         _command = command
 
-        # Bind the standard output streams to the exported events
+        # Bind the standard streams to the exported events
+        _stdin = NailgunStreamInput(OnStdIn)
         _stdout = NailgunStreamOutput(OnStdOut, Ansi: command.SupportsAnsi(1))
         _stderr = NailgunStreamOutput(OnStdErr, Ansi: command.SupportsAnsi(2))
 
     override def InitializeLifetimeService():
     """ Protect against the runtime tearing down the object after some time """
         return null
+
+    protected def OnStdIn() as int:
+        return StdIn() if StdIn
 
     protected def OnStdOut(str):
         StdOut(str) if StdOut
@@ -106,6 +112,8 @@ class AppDomainRunner(MarshalByRefObject):
 
     protected def Invoke(asm as Assembly, argv as (string)) as int:
         # Replace console streams
+        backupIn = Console.In
+        Console.SetIn(_stdin)
         backupOut = Console.Out
         Console.SetOut(_stdout)
         backupErr = Console.Error
@@ -138,6 +146,7 @@ class AppDomainRunner(MarshalByRefObject):
                 Console.Error.Write(char(0x1B) + "[0m")
 
             # Restore console streams
+            Console.SetIn(backupIn)
             Console.SetOut(backupOut)
             Console.SetError(backupErr)
             # and the colors
@@ -165,10 +174,13 @@ class AppDomainRunner(MarshalByRefObject):
         result as duck
         try:
 
+            IsRunning = true
             asm = Assembly.LoadFrom(_command.Program)
             result = Invoke(asm, _command.Args.ToArray())
 
         ensure:
+            IsRunning = false
+
             # Restore process environment
             Directory.SetCurrentDirectory(cwd)
             for pair in backup_env:
@@ -176,6 +188,8 @@ class AppDomainRunner(MarshalByRefObject):
 
         return result
 
+    def Terminate():
+        raise "Termination is not implemented yet"        
 
     def ToString():
         return "Runner[$_command.Program]"

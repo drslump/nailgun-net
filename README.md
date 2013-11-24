@@ -73,7 +73,7 @@ in them (Note: this is not supported in Mono).
 - [x] Prototype
 - [ ] Shadow copy of pre-loaded assemblies
 - [ ] Windows support
-- [ ] Standard input stream support
+- [x] Standard input stream support
 - [x] Multi threaded server
 - [ ] Signal handling
 - [ ] Automatic server spawning

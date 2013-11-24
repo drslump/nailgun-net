@@ -20,6 +20,7 @@ class AppDomainPool:
     class Entry:
         property Program as string
         property Domain as AppDomain
+        property Locked as bool
         property LastUsed as DateTime
 
     class EntryComparer(IComparer[of Entry]):
@@ -31,7 +32,7 @@ class AppDomainPool:
 
     property MaxDomains = 10
 
-    _domains = ConcurrentDictionary[of string, AppDomain]()
+    _domains = ConcurrentDictionary[of string, Entry]()
     _sorted = SortedSet[of Entry](EntryComparer())
     _warmed = ConcurrentQueue[of AppDomain]()
 
@@ -54,8 +55,7 @@ class AppDomainPool:
             lock _sorted:
                 for entry in _sorted:
                     # Skip those that haven't been released yet
-                    if Threading.Monitor.IsEntered(entry.Domain):
-                        continue
+                    continue if entry.Locked
                     Remove(entry.Program)
                     break
 
@@ -68,7 +68,7 @@ class AppDomainPool:
             entry = Entry(Program: program, Domain: domain, LastUsed: DateTime.Now)
             _sorted.Add(entry)
 
-        return domain
+        return entry
 
     def Warmup():
     """ Creates a series of AppDomains waiting to be used """
@@ -78,73 +78,69 @@ class AppDomainPool:
 
     def Acquire(command as Command) as AppDomainRunner:
     """ Acquire a domain associated to the program and lock on it """
-        domain = _domains.GetOrAdd(command.Program, Create)
+        target = _domains.GetOrAdd(command.Program, Create)
 
         # Lock on the domain instance
-        Threading.Monitor.Enter(domain)
-        print "Locking on $command (domain: $domain)"
+        Threading.Monitor.Enter(target)
+        target.Locked = true
+        print "Locking on $command (domain: $(target.Domain))"
 
-        return CreateRunner(command, domain)
+        return CreateRunner(command, target.Domain)
 
     def Release(program):
     """ Release the lock on the domain associated to the program """
-        domain as AppDomain
+        target as Entry
 
-        _domains.TryGetValue(program, domain)
-        if domain:
+        _domains.TryGetValue(program, target)
+        if target:
             lock _sorted:
                 # Looks inefficient but the list is small
                 for entry in _sorted:
-                    if entry.Domain is domain:
+                    if entry is target:
                         # The data container doesn't allow replacing
                         _sorted.Remove(entry)
                         entry.LastUsed = DateTime.Now
                         _sorted.Add(entry)
                         break
 
-            print "Release $program (domain: $domain)"
-            Threading.Monitor.Exit(domain)
+            print "Release $program (domain: $(target.Domain))"
+            target.Locked = false
+            Threading.Monitor.Exit(target)
 
     def Reload(command as Command):
-        domain as AppDomain
-        _domains.TryRemove(command.Program, domain)
+        target as Entry
+        _domains.TryRemove(command.Program, target)
+        lock _sorted:
+            _sorted.Remove(target)
 
-        print "Reload: $domain"
+        print "Reload: $(target.Domain)"
+
+        prevDomain = target
 
         # Ask for a new one before lifting the lock on the previous
         runner = Acquire(command)
 
         # Lift the lock on the previous one
-        Threading.Monitor.Exit(domain)
+        target.Locked = false
+        Threading.Monitor.Exit(target)
 
-        # Update the entry to reflect the new domain instance
-        for entry in _sorted:
-            if entry.Domain is domain:
-                entry.Domain = runner.Domain
-                break
-
-        lock domain:
-            print "Disposing: $domain"
-            AppDomain.Unload(domain)
+        print "Disposing: $(target.Domain)"
+        AppDomain.Unload(target.Domain)
 
         return runner
 
     def Remove(program):
     """ Removes a given domain from the pool """
-        domain as AppDomain
-        _domains.TryRemove(program, domain)
-        if not domain:
-            raise "Unable to remove AppDomaindomain"
+        target as Entry
+        _domains.TryRemove(program, target)
+        if not target:
+            raise "Unable to remove AppDomain"
 
         Release(program)
 
         lock _sorted:
-            for entry in _sorted:
-                if entry.Domain is domain:
-                    _sorted.Remove(entry)
-                    break
+            _sorted.Remove(target)
 
-        lock domain:
-            print "Disposing: $domain"
-            AppDomain.Unload(domain)
+        print "Disposing: $(target.Domain)"
+        AppDomain.Unload(target.Domain)
 

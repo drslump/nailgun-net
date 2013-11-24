@@ -33,12 +33,12 @@ class NailgunStreamOutput(TextWriter):
         if color in colorLight:
             code += "1;"
             base += colorLight[color] cast int
-        else:
+        elif color in colorDark:
             base += colorDark[color] cast int
+        else:
+            base = 0
 
-        code += base + "m"
-
-        return code
+        return code + base + "m"
 
 
     property Ansi as bool
@@ -63,8 +63,13 @@ class NailgunStreamOutput(TextWriter):
         if Ansi:
             # HACK: Perhaps it's only in Mono but calling `ResetColor` doesn't modify
             #       the FC or BC properties, so we can't detect them properly.
-            #       What we do is just use the changed colors for the current string,
-            #       not ideal but seems to work better than ignoring the reset completely.
+            #       The only possible solution seems to be to capture the actual output
+            #       stream of the process and detect the Ansi reset there. However
+            #       it would involve spawning a child process to run the target program
+            #       there, which is certainly not ideal form any point of view.
+            #
+            #       What we do now is use the changed colors only for the current string,
+            #       works for a bunch of use cases and is certainly better than a non-reset.
             if Console.ForegroundColor != lastFg or Console.BackgroundColor != lastBg:
                 value += char(0x1B) + "[0m"
 
@@ -80,22 +85,36 @@ class NailgunStreamOutput(TextWriter):
 
 
 class NailgunStreamInput(TextReader):
-    br as BinaryReader
-    bw as BinaryWriter
-    first as bool
+    callable InputCallback() as int
 
-    def constructor(br as BinaryReader, bw as BinaryWriter):
+    _delegate as InputCallback
+
+    def constructor(delegate as InputCallback):
         super()
-        self.br = br
-        self.bw = bw
-        self.first = true
+        _delegate = delegate
 
-    # override def Read(value as int) as string:
-    #     if first:
-    #         chunk = Chunk(ChunkType.InputStart)
-    #         SerializeChunk(chunk, bw)
+    override def Read() as int:
+        return _delegate()
 
-        # TODO: We have to lock until there is some input
+    # override def ReadToEnd() as string:
+    #     result = ''
+    #     while (ch = Read()) != -1:
+    #         result += ch cast char 
+    #     return result
+
+    # override def Read(buffer as (char), index as int, count as int) as int:
+    #     cnt = 0
+    #     for i in range(index, index+count):
+    #         ch = Read()
+    #         break if ch == -1
+    #         buffer[index + cnt] = ch
+
+    #     return cnt
+
+    # override def ReadLine() as string:
+    #     result = _delegate(10)
+    #     return result
+
 
 
 
