@@ -23,6 +23,9 @@ class AppDomainPool:
         property Locked as bool
         property LastUsed as DateTime
 
+        def ToString():
+            return "Entry[$Program]"
+
     class EntryComparer(IComparer[of Entry]):
         def Compare(x as Entry, y as Entry) as int:
             if x.LastUsed < y.LastUsed:
@@ -83,7 +86,7 @@ class AppDomainPool:
         # Lock on the domain instance
         Threading.Monitor.Enter(target)
         target.Locked = true
-        print "Locking on $command (domain: $(target.Domain))"
+        print "Locked $target"
 
         return CreateRunner(command, target.Domain)
 
@@ -94,18 +97,13 @@ class AppDomainPool:
         _domains.TryGetValue(program, target)
         if target:
             lock _sorted:
-                # Looks inefficient but the list is small
-                for entry in _sorted:
-                    if entry is target:
-                        # The data container doesn't allow replacing
-                        _sorted.Remove(entry)
-                        entry.LastUsed = DateTime.Now
-                        _sorted.Add(entry)
-                        break
+                _sorted.Remove(target)
+                target.LastUsed = DateTime.Now
+                _sorted.Add(target)
 
-            print "Release $program (domain: $(target.Domain))"
             target.Locked = false
             Threading.Monitor.Exit(target)
+            print "Released $target"
 
     def Reload(command as Command):
         target as Entry
@@ -113,9 +111,7 @@ class AppDomainPool:
         lock _sorted:
             _sorted.Remove(target)
 
-        print "Reload: $(target.Domain)"
-
-        prevDomain = target
+        print "Reloading $target"
 
         # Ask for a new one before lifting the lock on the previous
         runner = Acquire(command)
@@ -124,7 +120,7 @@ class AppDomainPool:
         target.Locked = false
         Threading.Monitor.Exit(target)
 
-        print "Disposing: $(target.Domain)"
+        print "Disposing $target"
         AppDomain.Unload(target.Domain)
 
         return runner
@@ -134,13 +130,13 @@ class AppDomainPool:
         target as Entry
         _domains.TryRemove(program, target)
         if not target:
-            raise "Unable to remove AppDomain"
+            raise "Unable to remove AppDomain for $program"
 
         Release(program)
 
         lock _sorted:
             _sorted.Remove(target)
 
-        print "Disposing: $(target.Domain)"
+        print "Disposing $target"
         AppDomain.Unload(target.Domain)
 
