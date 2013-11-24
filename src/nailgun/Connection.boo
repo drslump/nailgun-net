@@ -26,7 +26,6 @@ class Connection:
         _heartbeat as Stopwatch
         _timer as Timers.Timer
 
-        _stdinEnabled = false
         _stdinQueue = BlockingCollection[of string]()
         _stdinCurrent = ''
         _stdinOffset = 0
@@ -55,12 +54,8 @@ class Connection:
 
         def OnStdIn() as int:
         """ Provides the next character available in stdin
+            NOTE: Highly inefficient right now but it seems to work :)
         """
-            # Request stdin stream contents the first time
-            if not _stdinEnabled:
-                _stdinEnabled = true
-                _writer.Write(Chunk(ChunkType.InputStart))
-
             # It seems that we had reached the EOS before
             if _stdinCurrent is null:
                 print "[DEBUG] StdIn requested after the EOS was received"
@@ -87,6 +82,10 @@ class Connection:
             _writer.Write(Chunk(ChunkType.Stderr, s))
 
         def ChunksConsumer():
+            # To optimize a bit the execution of commands consuming
+            # from stdin we always request input from the client
+            _writer.Write(Chunk(ChunkType.InputStart))
+
             while true:
                 try:
                     chunk = _reader.ReadChunk()
@@ -96,6 +95,8 @@ class Connection:
                         if _heartbeat.IsRunning:
                             _heartbeat.Restart()
                         _stdinQueue.Add(chunk.Data)
+                        # Notify the client we want another input chunk
+                        _writer.Write(Chunk(ChunkType.InputStart))
                     elif chunk.Type == ChunkType.InputEnd:  # ie: Ctrl+D
                         _stdinQueue.Add(null)
 
@@ -124,8 +125,6 @@ class Connection:
     pool as AppDomainPool
     client as TcpClient
 
-    bw as NailgunWriter
-
     def constructor(pool as AppDomainPool):
         self.pool = pool
 
@@ -150,6 +149,8 @@ class Connection:
                         print "Unexepected Heartbeat chunk. Command chunk not received yet"
                     case ChunkType.Stdin:
                         print "Unexepected Stdin chunk. Command chunk not received yet"
+                    case ChunkType.InputEnd:
+                        print "Unexpected Stdin EOF chunk"
 
                     case ChunkType.Argument:
                         command.Args.Add(chunk.Data)
@@ -160,13 +161,6 @@ class Connection:
 
                     case ChunkType.WorkingDirectory:
                         command.WorkingDirectory = chunk.Data
-
-                    case ChunkType.Stdin:
-                        print "ChunkStdin: <$chunk.Data>"
-
-                    case ChunkType.InputEnd:
-                        # TODO: Resolve any stdin waiting
-                        print "ChunkInpuEnd"
 
                     case ChunkType.Command:
                         command.Program = chunk.Data
