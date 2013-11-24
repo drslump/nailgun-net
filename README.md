@@ -12,6 +12,7 @@ for Java](http://www.martiansoftware.com/nailgun/), it's compatible
 with its protocol and so it can be used with the standard nailgun
 client (`ng`).
 
+[Check out the screencast](http://asciinema.org/a/6507) to see it in action! 
 
 ## How it works
 
