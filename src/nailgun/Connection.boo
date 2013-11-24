@@ -52,11 +52,18 @@ class Connection:
         def Dispose():
             _timer.Dispose()
 
+        _stdinFirst = false
         def OnStdIn() as int:
         """ Provides the next character available in stdin
             NOTE: Highly inefficient right now but it seems to work :)
         """
-            # It seems that we had reached the EOS before
+            # To optimize a bit the execution of commands consuming
+            # from stdin we always request input from the client
+            if not _stdinFirst:
+                _stdinFirst = true
+                _writer.Write(Chunk(ChunkType.InputStart))
+			
+			# It seems that we had reached the EOS before
             if _stdinCurrent is null:
                 print "[DEBUG] StdIn requested after the EOS was received"
                 return -1
@@ -82,9 +89,7 @@ class Connection:
             _writer.Write(Chunk(ChunkType.Stderr, s))
 
         def ChunksConsumer():
-            # To optimize a bit the execution of commands consuming
-            # from stdin we always request input from the client
-            _writer.Write(Chunk(ChunkType.InputStart))
+
 
             while true:
                 try:
@@ -105,6 +110,8 @@ class Connection:
                 except ex as System.ObjectDisposedException:  # .Net
                     break
                 except ex as System.IO.EndOfStreamException:
+                    break
+                except ex as System.IO.IOException:  # .Net (Unable to read data from transport connection: An existing connections was forcibly closed by remote host)
                     break
 
             print "ChunksConsumer terminated"
